@@ -1,16 +1,16 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Tractatus Log</title>
+  <title>Tractatus Log & Scratchpad</title>
   <style>
-    /* 색상 및 폰트 설정 (다크모드 지원) */
     :root {
       --bg-color: #ffffff;
       --text-color: #1a1a1a;
       --dim-color: #888888;
-      --accent-color: #2c2c2c;
+      --accent-color: #000000;
+      --border-color: #e0e0e0;
       --line-height: 1.8;
     }
     @media (prefers-color-scheme: dark) {
@@ -19,6 +19,7 @@
         --text-color: #e0e0e0;
         --dim-color: #666666;
         --accent-color: #4ea8de;
+        --border-color: #2a2a2a;
       }
     }
 
@@ -32,22 +33,46 @@
       line-height: var(--line-height);
     }
 
-    /* 에디터 공간 */
+    /* Minimal Folder Switcher */
+    nav.folder-tabs {
+      display: flex;
+      gap: 15px;
+      margin-bottom: 30px;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 10px;
+    }
+    nav.folder-tabs button {
+      background: none;
+      border: none;
+      font-family: inherit;
+      font-size: 0.85rem;
+      color: var(--dim-color);
+      cursor: pointer;
+      padding: 0;
+    }
+    nav.folder-tabs button.active {
+      color: var(--text-color);
+      font-weight: bold;
+      text-decoration: underline;
+    }
+
+    /* Minimal Editor */
     .editor-box {
       border: 1px dashed var(--dim-color);
       padding: 15px;
-      margin-bottom: 50px;
-      border-radius: 4px;
+      margin-bottom: 40px;
+      border-radius: 2px;
     }
     .editor-box input, .editor-box textarea, .editor-box button {
       font-family: inherit;
       background: transparent;
-      border: 1px solid var(--dim-color);
+      border: 1px solid var(--border-color);
       color: var(--text-color);
       padding: 8px;
       margin-bottom: 8px;
       width: 100%;
       box-sizing: border-box;
+      font-size: 0.85rem;
     }
     .editor-box button {
       background: var(--text-color);
@@ -55,18 +80,23 @@
       font-weight: bold;
       cursor: pointer;
       border: none;
+      margin-top: 4px;
+    }
+    .editor-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--dim-color);
+      margin-bottom: 8px;
     }
 
-    /* 기록 타임라인 아이템 */
+    /* Log Stream Item */
     .log-item {
-      margin-bottom: 24px;
+      margin-bottom: 22px;
       display: flex;
       align-items: flex-start;
-      /* 점 개수에 따른 자동 들여쓰기 */
-      padding-left: calc(var(--indent, 0) * 24px); 
+      padding-left: calc(var(--indent, 0) * 22px);
     }
-
-    /* 메타데이터 (id 상단 + date 하단 묶음) */
     .log-meta {
       display: inline-flex;
       flex-direction: column;
@@ -74,114 +104,197 @@
       margin-right: 12px;
       line-height: 1.2;
       flex-shrink: 0;
-      margin-top: 4px;
+      margin-top: 3px;
       user-select: none;
     }
     .log-id { font-size: 0.7rem; color: var(--accent-color); font-weight: bold; }
     .log-date { font-size: 0.55rem; color: var(--dim-color); }
-    .log-text { font-size: 1rem; }
+    .log-content { font-size: 0.95rem; flex-grow: 1; }
+    
+    /* Edit Action Button */
+    .edit-btn {
+      background: none;
+      border: none;
+      color: var(--dim-color);
+      font-size: 0.65rem;
+      cursor: pointer;
+      padding: 0;
+      margin-left: 8px;
+      opacity: 0.3;
+      transition: opacity 0.2s;
+      font-family: inherit;
+    }
+    .log-item:hover .edit-btn { opacity: 1; }
   </style>
 </head>
 <body>
 
-  <!-- 에디터 영역 (비밀번호 검증) -->
+  <!-- Minimal Folder Filter Navigation -->
+  <nav class="folder-tabs">
+    <button id="tab-all" class="active" onclick="switchFolder('all')">[ ALL ]</button>
+    <button id="tab-tractatus" onclick="switchFolder('tractatus')">[ TRACTATUS ]</button>
+    <button id="tab-scratchpad" onclick="switchFolder('scratchpad')">[ SCRATCHPAD ]</button>
+  </nav>
+
+  <!-- Editor Section -->
   <section class="editor-box">
-    <input type="password" id="secretCode" placeholder="비밀 보안 코드" />
-    <input type="text" id="logId" placeholder="논고 번호 (예: 1.11)" />
-    <textarea id="logContent" rows="3" placeholder="기록할 아이디어를 적으세요..."></textarea>
-    <button onclick="addLog()" id="submitBtn">기록하기 (Publish)</button>
+    <div class="editor-header">
+      <span id="editor-title">NEW ENTRY</span>
+      <span id="cancel-edit" style="display:none; cursor:pointer;" onclick="resetEditor()">[ Cancel Edit ]</span>
+    </div>
+    <input type="hidden" id="editingUid" value="" />
+    <input type="password" id="secretCode" placeholder="Secret Key" />
+    <input type="text" id="logId" placeholder="No. (e.g. 1.11 — leave blank for Scratchpad)" />
+    <textarea id="logContent" rows="3" placeholder="Write an idea or note..."></textarea>
+    <button onclick="saveLog()" id="submitBtn">Publish Entry</button>
   </section>
 
-  <!-- 기록이 출력될 공간 -->
+  <!-- Timeline Stream -->
   <main id="logStream"></main>
 
   <script>
-    // 🔴 [필수 수정] 1. 본인의 Cloudflare Worker 주소
-    const WORKER_URL = "https://log-proxy.seashine-49f.workers.dev/";
-    
-    // 🔴 [필수 수정] 2. 본인의 GitHub 아이디 (데이터 불러오기용)
-    const GITHUB_USERNAME = "haeron-work"; 
+    // 🔴 [CONFIG] Replace with your actual URLs/Info
+    const WORKER_URL = "https://log-proxy.haeron-work.workers.dev";
+    const GITHUB_USERNAME = "haeron-work";
     const GITHUB_REPO = "tractatus-log";
-    
-    // 페이지 접속 시 기존 글 불러오기
+
+    let allLogs = [];
+    let currentFolder = 'all';
+
     document.addEventListener("DOMContentLoaded", fetchLogs);
 
     async function fetchLogs() {
       const dataUrl = `https://raw.githubusercontent.com/${GITHUB_USERNAME}/${GITHUB_REPO}/main/logs.json`;
       try {
-        // 캐시 무시를 위해 현재 시간 타임스탬프 추가
         const res = await fetch(dataUrl + `?t=${new Date().getTime()}`);
-        if (!res.ok) return; // 첫 생성시 에러 무시
-        const logs = await res.json();
-        
-        const stream = document.getElementById('logStream');
-        stream.innerHTML = ''; // 초기화
-        
-        logs.forEach(log => renderLog(log.id, log.date, log.content));
+        if (!res.ok) return;
+        allLogs = await res.json();
+        renderStream();
       } catch (e) {
-        console.log("데이터를 불러오지 못했습니다.", e);
+        console.error("Failed to load logs.", e);
       }
     }
 
-    // 화면에 글 하나 그리기 함수
-    function renderLog(id, dateStr, content) {
-      const stream = document.getElementById('logStream');
-      const dotCount = (id.match(/\./g) || []).length;
-      
-      const newLog = document.createElement('article');
-      newLog.className = 'log-item';
-      newLog.style.setProperty('--indent', dotCount);
-
-      newLog.innerHTML = `
-        <div class="log-meta">
-          <span class="log-id">${id}</span>
-          <span class="log-date">${dateStr}</span>
-        </div>
-        <span class="log-text">${content.replace(/\n/g, '<br>')}</span>
-      `;
-      // 가장 최근 글이 맨 아래로 붙도록 처리 (appendChild)
-      stream.appendChild(newLog);
+    function switchFolder(folder) {
+      currentFolder = folder;
+      document.querySelectorAll('.folder-tabs button').forEach(btn => btn.classList.remove('active'));
+      document.getElementById(`tab-${folder}`).classList.add('active');
+      renderStream();
     }
 
-    // 작성 버튼 클릭 시 처리
-    async function addLog() {
+    function renderStream() {
+      const stream = document.getElementById('logStream');
+      stream.innerHTML = '';
+
+      const filteredLogs = allLogs.filter(log => {
+        const isTractatus = log.id && log.id.trim() !== '';
+        if (currentFolder === 'tractatus') return isTractatus;
+        if (currentFolder === 'scratchpad') return !isTractatus;
+        return true; // 'all'
+      });
+
+      filteredLogs.forEach(log => {
+        const isTractatus = log.id && log.id.trim() !== '';
+        const dotCount = isTractatus ? (log.id.match(/\./g) || []).length : 0;
+        
+        // Use updatedAt if present, otherwise use initial date
+        const displayDate = log.updatedAt ? `upd ${log.updatedAt}` : log.date;
+
+        const article = document.createElement('article');
+        article.className = 'log-item';
+        article.style.setProperty('--indent', dotCount);
+
+        article.innerHTML = `
+          <div class="log-meta">
+            <span class="log-id">${isTractatus ? log.id : '•'}</span>
+            <span class="log-date">${displayDate}</span>
+          </div>
+          <div class="log-content">
+            <span>${log.content.replace(/\n/g, '<br>')}</span>
+            <button class="edit-btn" onclick="startEdit('${log.uid}')">[edit]</button>
+          </div>
+        `;
+        stream.appendChild(article);
+      });
+    }
+
+    function startEdit(uid) {
+      const log = allLogs.find(l => l.uid === uid);
+      if (!log) return;
+
+      document.getElementById('editingUid').value = log.uid;
+      document.getElementById('logId').value = log.id || '';
+      document.getElementById('logContent').value = log.content || '';
+      
+      document.getElementById('editor-title').innerText = "EDIT ENTRY";
+      document.getElementById('submitBtn').innerText = "Update Entry";
+      document.getElementById('cancel-edit').style.display = "inline";
+      
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function resetEditor() {
+      document.getElementById('editingUid').value = '';
+      document.getElementById('logId').value = '';
+      document.getElementById('logContent').value = '';
+      
+      document.getElementById('editor-title').innerText = "NEW ENTRY";
+      document.getElementById('submitBtn').innerText = "Publish Entry";
+      document.getElementById('cancel-edit').style.display = "none";
+    }
+
+    async function saveLog() {
       const btn = document.getElementById('submitBtn');
       const password = document.getElementById('secretCode').value;
+      const uid = document.getElementById('editingUid').value;
       const id = document.getElementById('logId').value;
       const content = document.getElementById('logContent').value;
 
-      if (!password || !id || !content) {
-        alert("모든 필드를 입력해주세요.");
+      if (!password || !content) {
+        alert("Please enter both Secret Key and Content.");
         return;
       }
 
-      btn.innerText = "저장 중...";
+      btn.innerText = "Saving...";
       btn.disabled = true;
 
       const now = new Date();
       const dateStr = `${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
 
+      const payload = {
+        password,
+        uid: uid || Date.now().toString(),
+        id,
+        content,
+        date: dateStr,
+        updatedAt: uid ? dateStr : null // Set updatedAt only if editing
+      };
+
       try {
-        // Cloudflare Worker로 데이터 전송
         const response = await fetch(WORKER_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ password, id, content, date: dateStr })
+          body: JSON.stringify(payload)
         });
 
         if (response.ok) {
-          // 화면에 즉시 새 글 추가
-          renderLog(id, dateStr, content);
-          document.getElementById('logContent').value = '';
-          document.getElementById('logId').value = '';
-          alert("성공적으로 저장되었습니다.");
+          // Local State Sync
+          const index = allLogs.findIndex(l => l.uid === payload.uid);
+          if (index > -1) {
+            allLogs[index] = { ...allLogs[index], id, content, updatedAt: dateStr };
+          } else {
+            allLogs.push({ uid: payload.uid, id, content, date: dateStr });
+          }
+
+          renderStream();
+          resetEditor();
+          alert("Successfully saved.");
         } else {
-          alert("오류: 비밀번호가 틀렸거나 저장에 실패했습니다.");
+          alert("Error: Incorrect password or save failed.");
         }
       } catch (err) {
-        alert("통신 오류가 발생했습니다.");
+        alert("Network error.");
       } finally {
-        btn.innerText = "기록하기 (Publish)";
         btn.disabled = false;
       }
     }
