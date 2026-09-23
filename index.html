@@ -11,6 +11,7 @@
       --dim-color: #888888;
       --accent-color: #000000;
       --border-color: #e0e0e0;
+      --danger-color: #d93838;
       --line-height: 1.8;
     }
     @media (prefers-color-scheme: dark) {
@@ -20,6 +21,7 @@
         --dim-color: #666666;
         --accent-color: #4ea8de;
         --border-color: #2a2a2a;
+        --danger-color: #ff5555;
       }
     }
 
@@ -27,19 +29,20 @@
       font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
       background-color: var(--bg-color);
       color: var(--text-color);
-      max-width: 680px;
+      max-width: 700px;
       margin: 40px auto;
       padding: 0 20px;
       line-height: var(--line-height);
     }
 
-    /* Minimal Folder Switcher */
+    /* Minimal Folder Switcher Tabs */
     nav.folder-tabs {
       display: flex;
       gap: 15px;
       margin-bottom: 30px;
       border-bottom: 1px solid var(--border-color);
       padding-bottom: 10px;
+      flex-wrap: wrap;
     }
     nav.folder-tabs button {
       background: none;
@@ -54,6 +57,9 @@
       color: var(--text-color);
       font-weight: bold;
       text-decoration: underline;
+    }
+    nav.folder-tabs button.tab-trash.active {
+      color: var(--danger-color);
     }
 
     /* Minimal Editor */
@@ -111,29 +117,38 @@
     .log-date { font-size: 0.55rem; color: var(--dim-color); }
     .log-content { font-size: 0.95rem; flex-grow: 1; }
     
-    /* Edit Action Button */
-    .edit-btn {
+    /* Action Buttons */
+    .action-group {
+      display: inline-block;
+      margin-left: 8px;
+    }
+    .action-btn {
       background: none;
       border: none;
       color: var(--dim-color);
       font-size: 0.65rem;
       cursor: pointer;
-      padding: 0;
-      margin-left: 8px;
-      opacity: 0.3;
+      padding: 0 3px;
+      opacity: 0.35;
       transition: opacity 0.2s;
       font-family: inherit;
     }
-    .log-item:hover .edit-btn { opacity: 1; }
+    .log-item:hover .action-btn { opacity: 1; }
+    
+    /* Red text for delete buttons */
+    .action-btn.delete-btn {
+      color: var(--danger-color);
+    }
   </style>
 </head>
 <body>
 
-  <!-- Minimal Folder Filter Navigation -->
+  <!-- Minimal Folder Navigation -->
   <nav class="folder-tabs">
     <button id="tab-all" class="active" onclick="switchFolder('all')">[ ALL ]</button>
     <button id="tab-tractatus" onclick="switchFolder('tractatus')">[ TRACTATUS ]</button>
     <button id="tab-scratchpad" onclick="switchFolder('scratchpad')">[ SCRATCHPAD ]</button>
+    <button id="tab-trash" class="tab-trash" onclick="switchFolder('trash')">[ TRASH ]</button>
   </nav>
 
   <!-- Editor Section -->
@@ -154,8 +169,8 @@
 
   <script>
     // 🔴 [CONFIG] Replace with your actual URLs/Info
-    const WORKER_URL = "https://log-proxy.haeron-work.workers.dev";
-    const GITHUB_USERNAME = "haeron-work";
+    const WORKER_URL = "https://log-proxy.본인아이디.workers.dev";
+    const GITHUB_USERNAME = "본인깃허브아이디";
     const GITHUB_REPO = "tractatus-log";
 
     let allLogs = [];
@@ -168,7 +183,18 @@
       try {
         const res = await fetch(dataUrl + `?t=${new Date().getTime()}`);
         if (!res.ok) return;
-        allLogs = await res.json();
+        const data = await res.json();
+        
+        // Ensure legacy items have unique uid and deleted flag
+        allLogs = data.map((item, idx) => ({
+          uid: item.uid || `legacy_${idx}_${Date.now()}`,
+          id: item.id || '',
+          content: item.content || '',
+          date: item.date || '',
+          updatedAt: item.updatedAt || null,
+          deleted: !!item.deleted
+        }));
+
         renderStream();
       } catch (e) {
         console.error("Failed to load logs.", e);
@@ -187,22 +213,46 @@
       stream.innerHTML = '';
 
       const filteredLogs = allLogs.filter(log => {
+        if (currentFolder === 'trash') return log.deleted; // TRASH TAB: deleted items only
+        if (log.deleted) return false; // Hide deleted items in non-trash tabs
+
         const isTractatus = log.id && log.id.trim() !== '';
         if (currentFolder === 'tractatus') return isTractatus;
         if (currentFolder === 'scratchpad') return !isTractatus;
         return true; // 'all'
       });
 
+      if (filteredLogs.length === 0) {
+        stream.innerHTML = `<div style="color: var(--dim-color); font-size: 0.85rem;">(No entries found)</div>`;
+        return;
+      }
+
       filteredLogs.forEach(log => {
         const isTractatus = log.id && log.id.trim() !== '';
         const dotCount = isTractatus ? (log.id.match(/\./g) || []).length : 0;
-        
-        // Use updatedAt if present, otherwise use initial date
         const displayDate = log.updatedAt ? `upd ${log.updatedAt}` : log.date;
 
         const article = document.createElement('article');
         article.className = 'log-item';
         article.style.setProperty('--indent', dotCount);
+
+        // Conditional action buttons for Trash vs Active logs
+        let actionsHtml = '';
+        if (currentFolder === 'trash') {
+          actionsHtml = `
+            <span class="action-group">
+              <button class="action-btn" onclick="performAction('restore', '${log.uid}')">[restore]</button>
+              <button class="action-btn delete-btn" onclick="performAction('delete_permanent', '${log.uid}')">[permanent delete]</button>
+            </span>
+          `;
+        } else {
+          actionsHtml = `
+            <span class="action-group">
+              <button class="action-btn" onclick="startEdit('${log.uid}')">[edit]</button>
+              <button class="action-btn delete-btn" onclick="performAction('trash', '${log.uid}')">[delete]</button>
+            </span>
+          `;
+        }
 
         article.innerHTML = `
           <div class="log-meta">
@@ -211,13 +261,14 @@
           </div>
           <div class="log-content">
             <span>${log.content.replace(/\n/g, '<br>')}</span>
-            <button class="edit-btn" onclick="startEdit('${log.uid}')">[edit]</button>
+            ${actionsHtml}
           </div>
         `;
         stream.appendChild(article);
       });
     }
 
+    // Start Edit Mode
     function startEdit(uid) {
       const log = allLogs.find(l => l.uid === uid);
       if (!log) return;
@@ -243,6 +294,42 @@
       document.getElementById('cancel-edit').style.display = "none";
     }
 
+    // Single unified function for Save / Edit / Trash / Restore / Permanent Delete
+    async function performAction(actionType, targetUid) {
+      const password = document.getElementById('secretCode').value;
+      if (!password) {
+        alert("Please enter Secret Key in the form above.");
+        document.getElementById('secretCode').focus();
+        return;
+      }
+
+      if (actionType === 'delete_permanent' && !confirm("Permanently delete this entry? This cannot be undone.")) {
+        return;
+      }
+
+      try {
+        const response = await fetch(WORKER_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            password,
+            action: actionType,
+            uid: targetUid
+          })
+        });
+
+        if (response.ok) {
+          const resData = await response.json();
+          allLogs = resData.logs;
+          renderStream();
+        } else {
+          alert("Error: Incorrect password or action failed.");
+        }
+      } catch (err) {
+        alert("Network error.");
+      }
+    }
+
     async function saveLog() {
       const btn = document.getElementById('submitBtn');
       const password = document.getElementById('secretCode').value;
@@ -261,40 +348,33 @@
       const now = new Date();
       const dateStr = `${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
 
-      const payload = {
-        password,
-        uid: uid || Date.now().toString(),
-        id,
-        content,
-        date: dateStr,
-        updatedAt: uid ? dateStr : null // Set updatedAt only if editing
-      };
-
       try {
         const response = await fetch(WORKER_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
+          body: JSON.stringify({
+            password,
+            action: 'save',
+            uid: uid || Date.now().toString(),
+            id,
+            content,
+            date: dateStr,
+            updatedAt: uid ? dateStr : null
+          })
         });
 
         if (response.ok) {
-          // Local State Sync
-          const index = allLogs.findIndex(l => l.uid === payload.uid);
-          if (index > -1) {
-            allLogs[index] = { ...allLogs[index], id, content, updatedAt: dateStr };
-          } else {
-            allLogs.push({ uid: payload.uid, id, content, date: dateStr });
-          }
-
+          const resData = await response.json();
+          allLogs = resData.logs;
           renderStream();
           resetEditor();
-          alert("Successfully saved.");
         } else {
           alert("Error: Incorrect password or save failed.");
         }
       } catch (err) {
         alert("Network error.");
       } finally {
+        btn.innerText = uid ? "Update Entry" : "Publish Entry";
         btn.disabled = false;
       }
     }
